@@ -65,6 +65,7 @@ pub enum NHCommand {
   Os(OsArgs),
   Home(HomeArgs),
   Darwin(DarwinArgs),
+  System(SystemArgs),
   Search(SearchArgs),
   Clean(CleanProxy),
 }
@@ -76,6 +77,7 @@ impl NHCommand {
       Self::Os(args) => args.get_feature_requirements(),
       Self::Home(args) => args.get_feature_requirements(),
       Self::Darwin(args) => args.get_feature_requirements(),
+      Self::System(args) => args.get_feature_requirements(),
       Self::Search(..) | Self::Clean(..) => Box::new(NoFeatures),
     }
   }
@@ -106,6 +108,9 @@ impl NHCommand {
         }
         args.run(elevation)
       },
+      // System command sets NH_CURRENT_COMMAND internally based on
+      // NH_SYSTEM_TYPE
+      Self::System(args) => args.run(elevation),
     }
   }
 }
@@ -308,7 +313,7 @@ pub struct OsRollbackArgs {
   pub diff: DiffType,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct CommonRebuildArgs {
   /// Only print actions, without performing them
   #[arg(long, short = 'n')]
@@ -688,7 +693,139 @@ impl DarwinReplArgs {
   }
 }
 
+/// System type for the unified `nh system` command
+#[derive(Debug, Clone, Copy)]
+pub enum SystemType {
+  Os,
+  Darwin,
+  Home,
+}
+
+impl SystemType {
+  /// Parse the system type from the `NH_SYSTEM_TYPE` environment variable
+  pub fn from_env() -> Result<Self, String> {
+    match std::env::var("NH_SYSTEM_TYPE").as_deref() {
+      Ok("os") => Ok(Self::Os),
+      Ok("darwin") => Ok(Self::Darwin),
+      Ok("home") => Ok(Self::Home),
+      Ok(other) => {
+        Err(format!(
+          "Invalid NH_SYSTEM_TYPE value '{other}'. Valid values: os, darwin, \
+           home"
+        ))
+      },
+      Err(_) => {
+        Err(
+          "NH_SYSTEM_TYPE environment variable is not set.\nSet it to one of: \
+           os, darwin, home\nExample: export NH_SYSTEM_TYPE=darwin"
+            .to_string(),
+        )
+      },
+    }
+  }
+}
+
 #[derive(Debug, Args)]
+#[clap(verbatim_doc_comment)]
+/// Unified system management command
+///
+/// Delegates to os, darwin, or home based on `NH_SYSTEM_TYPE` environment
+/// variable. Valid values for `NH_SYSTEM_TYPE`: os, darwin, home
+pub struct SystemArgs {
+  #[command(subcommand)]
+  pub subcommand: SystemSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SystemSubcommand {
+  /// Build and activate the new configuration, and make it the boot default
+  Switch(SystemRebuildArgs),
+
+  /// Build the new configuration
+  Build(SystemRebuildArgs),
+
+  /// Build the new configuration and make it the boot default (os only)
+  Boot(SystemRebuildArgs),
+
+  /// Build and activate the new configuration without boot default (os only)
+  Test(SystemRebuildArgs),
+
+  /// Load configuration in a repl
+  Repl(SystemReplArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SystemRebuildArgs {
+  #[command(flatten)]
+  pub common: CommonRebuildArgs,
+
+  #[command(flatten)]
+  pub update_args: UpdateArgs,
+
+  /// Hostname (os/darwin) or configuration name (home) selector
+  #[arg(long, short = 'H', global = true)]
+  pub hostname: Option<String>,
+
+  /// Home-manager configuration name (alias for --hostname, home only)
+  #[arg(long, short, conflicts_with = "hostname")]
+  pub configuration: Option<String>,
+
+  /// Explicitly select a specialisation
+  #[arg(long, short)]
+  pub specialisation: Option<String>,
+
+  /// Ignore specialisations
+  #[arg(long, short = 'S')]
+  pub no_specialisation: bool,
+
+  /// Install bootloader (os only)
+  #[arg(long)]
+  pub install_bootloader: bool,
+
+  /// Extra arguments passed to nix build
+  #[arg(last = true)]
+  pub extra_args: Vec<String>,
+
+  /// Don't panic if calling nh as root (os/darwin only)
+  #[arg(short = 'R', long, env = "NH_BYPASS_ROOT_CHECK")]
+  pub bypass_root_check: bool,
+
+  /// Deploy to a different host over ssh (os only)
+  #[arg(long)]
+  pub target_host: Option<String>,
+
+  /// Build on a different host over ssh (os only)
+  #[arg(long)]
+  pub build_host: Option<String>,
+
+  /// Backup extension for existing files (home only)
+  #[arg(long, short = 'b')]
+  pub backup_extension: Option<String>,
+
+  /// Show activation logs
+  #[arg(long, env = "NH_SHOW_ACTIVATION_LOGS")]
+  pub show_activation_logs: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SystemReplArgs {
+  #[command(flatten)]
+  pub installable: Installable,
+
+  /// Hostname (os/darwin) or configuration name (home) selector
+  #[arg(long, short = 'H', global = true)]
+  pub hostname: Option<String>,
+
+  /// Home-manager configuration name (alias for --hostname, home only)
+  #[arg(long, short, conflicts_with = "hostname")]
+  pub configuration: Option<String>,
+
+  /// Extra arguments passed to nix repl (home only)
+  #[arg(last = true)]
+  pub extra_args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct UpdateArgs {
   #[arg(short = 'u', long = "update", conflicts_with = "update_input")]
   /// Update all flake inputs
@@ -699,7 +836,7 @@ pub struct UpdateArgs {
   pub update_input: Option<Vec<String>>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Default, Args)]
 pub struct NixBuildPassthroughArgs {
   /// Number of concurrent jobs Nix should run
   #[arg(long, short = 'j')]

@@ -11,6 +11,7 @@ pub mod json;
 pub mod logging;
 pub mod nixos;
 pub mod search;
+pub mod system;
 pub mod update;
 pub mod util;
 
