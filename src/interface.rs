@@ -694,7 +694,7 @@ impl DarwinReplArgs {
 }
 
 /// System type for the unified `nh system` command
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum SystemType {
   Os,
   Darwin,
@@ -723,15 +723,48 @@ impl SystemType {
       },
     }
   }
+
+  /// Try to extract --system-type from command line args (for early parsing)
+  pub fn from_args() -> Option<Self> {
+    let args: Vec<String> = std::env::args().collect();
+    for (i, arg) in args.iter().enumerate() {
+      // Handle --system-type=value
+      if let Some(value) = arg.strip_prefix("--system-type=") {
+        return match value {
+          "os" => Some(Self::Os),
+          "darwin" => Some(Self::Darwin),
+          "home" => Some(Self::Home),
+          _ => None,
+        };
+      }
+      // Handle --system-type value
+      if arg == "--system-type" || arg == "-T" {
+        if let Some(value) = args.get(i + 1) {
+          return match value.as_str() {
+            "os" => Some(Self::Os),
+            "darwin" => Some(Self::Darwin),
+            "home" => Some(Self::Home),
+            _ => None,
+          };
+        }
+      }
+    }
+    None
+  }
 }
 
 #[derive(Debug, Args)]
 #[clap(verbatim_doc_comment)]
 /// Unified system management command
 ///
-/// Delegates to os, darwin, or home based on `NH_SYSTEM_TYPE` environment
-/// variable. Valid values for `NH_SYSTEM_TYPE`: os, darwin, home
+/// Delegates to os, darwin, or home based on --system-type flag or
+/// `NH_SYSTEM_TYPE` environment variable.
+/// Valid values: os, darwin, home
 pub struct SystemArgs {
+  /// System type to delegate to (overrides NH_SYSTEM_TYPE env var)
+  #[arg(long, short = 'T', value_enum, global = true, env = "NH_SYSTEM_TYPE")]
+  pub system_type: Option<SystemType>,
+
   #[command(subcommand)]
   pub subcommand: SystemSubcommand,
 }

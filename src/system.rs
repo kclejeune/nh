@@ -1,5 +1,5 @@
 //! Implementation of the `nh system` command that delegates to os/darwin/home
-//! based on the `NH_SYSTEM_TYPE` environment variable.
+//! based on the `--system-type` flag or `NH_SYSTEM_TYPE` environment variable.
 
 use color_eyre::eyre::{Result, bail};
 use tracing::debug;
@@ -32,10 +32,15 @@ use crate::{
 impl SystemArgs {
   /// Run the system command by delegating to the appropriate target
   pub fn run(self, elevation: ElevationStrategy) -> Result<()> {
-    let system_type =
-      SystemType::from_env().map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
+    // system_type is populated by clap from --system-type flag or NH_SYSTEM_TYPE env var
+    let system_type = self.system_type.ok_or_else(|| {
+      color_eyre::eyre::eyre!(
+        "System type not specified.\nUse --system-type or set NH_SYSTEM_TYPE \
+         environment variable.\nValid values: os, darwin, home"
+      )
+    })?;
 
-    debug!("NH_SYSTEM_TYPE resolved to: {:?}", system_type);
+    debug!("System type resolved to: {:?}", system_type);
 
     // Set NH_CURRENT_COMMAND based on the target system type
     let command_name = match system_type {
