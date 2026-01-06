@@ -32,13 +32,17 @@ use crate::{
 impl SystemArgs {
   /// Run the system command by delegating to the appropriate target
   pub fn run(self, elevation: ElevationStrategy) -> Result<()> {
-    // system_type is populated by clap from --system-type flag or NH_SYSTEM_TYPE env var
-    let system_type = self.system_type.ok_or_else(|| {
-      color_eyre::eyre::eyre!(
-        "System type not specified.\nUse --system-type or set NH_SYSTEM_TYPE \
-         environment variable.\nValid values: os, darwin, home"
-      )
-    })?;
+    // system_type is populated by clap from --system-type flag or
+    // NH_SYSTEM_TYPE env var. If neither is set, autodetect based on platform.
+    let system_type = self.system_type.unwrap_or_else(|| {
+      let detected = SystemType::autodetect();
+      debug!(
+        "System type autodetected as {:?} ({})",
+        detected,
+        detected.detection_reason()
+      );
+      detected
+    });
 
     debug!("System type resolved to: {:?}", system_type);
 
@@ -256,11 +260,8 @@ impl SystemRebuildArgs {
     HomeRebuildArgs {
       common:               self.common.clone(),
       update_args:          self.update_args.clone(),
-      // For home, prefer --configuration over --hostname
-      configuration:        self
-        .configuration
-        .clone()
-        .or_else(|| self.hostname.clone()),
+      // hostname is used for both -H/--hostname and -c/--configuration
+      configuration:        self.hostname.clone(),
       specialisation:       self.specialisation.clone(),
       no_specialisation:    self.no_specialisation,
       extra_args:           self.extra_args.clone(),
@@ -296,11 +297,8 @@ impl SystemReplArgs {
   pub fn to_home_repl_args(&self) -> HomeReplArgs {
     HomeReplArgs {
       installable:   self.installable.clone(),
-      // For home, prefer --configuration over --hostname
-      configuration: self
-        .configuration
-        .clone()
-        .or_else(|| self.hostname.clone()),
+      // hostname is used for both -H/--hostname and -c/--configuration
+      configuration: self.hostname.clone(),
       extra_args:    self.extra_args.clone(),
     }
   }
@@ -415,9 +413,9 @@ mod tests {
   }
 
   #[test]
-  fn test_home_rebuild_args_configuration_takes_precedence() {
-    // When both configuration and hostname are set, configuration should be
-    // used
+  fn test_home_rebuild_args_uses_hostname_as_configuration() {
+    // The hostname field (populated via -H or -c) should become configuration
+    // for home
     use crate::{
       installable::Installable,
       interface::{
@@ -442,8 +440,7 @@ mod tests {
         update_all:   false,
         update_input: None,
       },
-      hostname:             Some("my-hostname".to_string()),
-      configuration:        Some("my-config".to_string()),
+      hostname:             Some("my-config".to_string()),
       specialisation:       None,
       no_specialisation:    false,
       install_bootloader:   false,
@@ -456,68 +453,23 @@ mod tests {
     };
 
     let home_args = args.to_home_rebuild_args();
-    // configuration should take precedence
+    // hostname should be mapped to configuration for home
     assert_eq!(home_args.configuration, Some("my-config".to_string()));
   }
 
   #[test]
-  fn test_home_rebuild_args_hostname_fallback() {
-    // When only hostname is set, it should be used as configuration
-    use crate::{
-      installable::Installable,
-      interface::{
-        CommonRebuildArgs,
-        DiffType,
-        NixBuildPassthroughArgs,
-        UpdateArgs,
-      },
-    };
-
-    let args = SystemRebuildArgs {
-      common:               CommonRebuildArgs {
-        dry:         false,
-        ask:         false,
-        installable: Installable::Unspecified,
-        no_nom:      false,
-        out_link:    None,
-        diff:        DiffType::Auto,
-        passthrough: NixBuildPassthroughArgs::default(),
-      },
-      update_args:          UpdateArgs {
-        update_all:   false,
-        update_input: None,
-      },
-      hostname:             Some("my-hostname".to_string()),
-      configuration:        None,
-      specialisation:       None,
-      no_specialisation:    false,
-      install_bootloader:   false,
-      extra_args:           vec![],
-      bypass_root_check:    false,
-      target_host:          None,
-      build_host:           None,
-      backup_extension:     None,
-      show_activation_logs: false,
-    };
-
-    let home_args = args.to_home_rebuild_args();
-    // hostname should be used as fallback
-    assert_eq!(home_args.configuration, Some("my-hostname".to_string()));
-  }
-
-  #[test]
-  fn test_home_repl_args_hostname_fallback() {
+  fn test_home_repl_args_uses_hostname_as_configuration() {
     use crate::installable::Installable;
 
     let args = SystemReplArgs {
-      installable:   Installable::Unspecified,
-      hostname:      Some("my-hostname".to_string()),
-      configuration: None,
-      extra_args:    vec![],
+      installable: Installable::Unspecified,
+      hostname:    Some("my-config".to_string()),
+      extra_args:  vec![],
     };
 
     let home_args = args.to_home_repl_args();
-    assert_eq!(home_args.configuration, Some("my-hostname".to_string()));
+    // hostname should be mapped to configuration for home
+    assert_eq!(home_args.configuration, Some("my-config".to_string()));
   }
 
   #[test]
@@ -547,7 +499,6 @@ mod tests {
         update_input: None,
       },
       hostname:             Some("my-host".to_string()),
-      configuration:        None,
       specialisation:       Some("gaming".to_string()),
       no_specialisation:    false,
       install_bootloader:   true,
@@ -600,7 +551,6 @@ mod tests {
         update_input: Some(vec!["nixpkgs".to_string()]),
       },
       hostname:             Some("macbook".to_string()),
-      configuration:        None,
       specialisation:       None,
       no_specialisation:    false,
       install_bootloader:   false,
@@ -622,5 +572,84 @@ mod tests {
     assert_eq!(darwin_args.hostname, Some("macbook".to_string()));
     assert!(darwin_args.bypass_root_check);
     assert!(darwin_args.show_activation_logs);
+  }
+
+  #[test]
+  fn test_system_type_autodetect_returns_valid_type() {
+    // Autodetect should always return a valid SystemType
+    let detected = SystemType::autodetect();
+    // Just verify it's one of the valid types
+    match detected {
+      SystemType::Os | SystemType::Darwin | SystemType::Home => {
+        // Valid
+      },
+    }
+  }
+
+  #[test]
+  fn test_system_type_detection_reason_is_non_empty() {
+    // Detection reason should be a non-empty string for all types
+    assert!(!SystemType::Os.detection_reason().is_empty());
+    assert!(!SystemType::Darwin.detection_reason().is_empty());
+    assert!(!SystemType::Home.detection_reason().is_empty());
+  }
+
+  #[test]
+  #[cfg(target_os = "macos")]
+  fn test_system_type_autodetect_on_macos_returns_darwin_or_home() {
+    // On macOS, autodetect returns Darwin if nix-darwin indicators are found,
+    // otherwise Home. Both are valid results depending on the system state.
+    let detected = SystemType::autodetect();
+    assert!(
+      matches!(detected, SystemType::Darwin | SystemType::Home),
+      "Expected Darwin or Home on macOS, got {:?}",
+      detected
+    );
+  }
+
+  #[test]
+  #[serial]
+  #[cfg(target_os = "macos")]
+  fn test_system_type_autodetect_respects_nh_darwin_flake_env() {
+    // When NH_DARWIN_FLAKE is set on macOS, should detect as Darwin
+    let _guard = EnvGuard::new("NH_DARWIN_FLAKE", "/some/path");
+    let detected = SystemType::autodetect();
+    assert!(
+      matches!(detected, SystemType::Darwin),
+      "Expected Darwin when NH_DARWIN_FLAKE is set, got {:?}",
+      detected
+    );
+  }
+
+  #[test]
+  #[serial]
+  #[cfg(target_os = "macos")]
+  fn test_system_type_autodetect_respects_nh_home_flake_env() {
+    // When NH_HOME_FLAKE is set (and NH_DARWIN_FLAKE is not), should detect as
+    // Home
+    let _guard1 = EnvGuard::remove("NH_DARWIN_FLAKE");
+    let _guard2 = EnvGuard::new("NH_HOME_FLAKE", "/some/path");
+    let detected = SystemType::autodetect();
+    assert!(
+      matches!(detected, SystemType::Home),
+      "Expected Home when NH_HOME_FLAKE is set, got {:?}",
+      detected
+    );
+  }
+
+  #[test]
+  #[serial]
+  #[cfg(target_os = "macos")]
+  fn test_system_type_autodetect_darwin_flake_takes_priority() {
+    // NH_DARWIN_FLAKE should take priority over NH_HOME_FLAKE
+    let _guard1 = EnvGuard::new("NH_DARWIN_FLAKE", "/darwin/path");
+    let _guard2 = EnvGuard::new("NH_HOME_FLAKE", "/home/path");
+    let detected = SystemType::autodetect();
+    assert!(
+      matches!(detected, SystemType::Darwin),
+      "Expected Darwin when both env vars set (Darwin takes priority), got \
+       {:?}",
+      detected
+    );
   }
 }

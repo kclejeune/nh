@@ -751,6 +751,88 @@ impl SystemType {
     }
     None
   }
+
+  /// Autodetect the system type based on the platform
+  ///
+  /// Detection order:
+  /// - On macOS: env vars → /run/current-system → flake paths → fallback to
+  ///   Home
+  /// - On Linux: check /etc/os-release for NixOS → fallback to Home
+  #[must_use]
+  pub fn autodetect() -> Self {
+    // Check if running on macOS
+    if cfg!(target_os = "macos") {
+      return Self::detect_macos();
+    }
+
+    // Check for NixOS by examining /etc/os-release
+    if Self::is_nixos() {
+      return Self::Os;
+    }
+
+    // Default to home-manager
+    Self::Home
+  }
+
+  /// Detect system type on macOS using multiple indicators
+  ///
+  /// Priority:
+  /// 1. NH_DARWIN_FLAKE env var → Darwin
+  /// 2. NH_HOME_FLAKE env var → Home
+  /// 3. /run/current-system exists → Darwin (nix-darwin activation indicator)
+  /// 4. /etc/nix-darwin/flake.nix exists → Darwin
+  /// 5. ~/.config/home-manager/flake.nix exists → Home
+  /// 6. Fallback → Home
+  fn detect_macos() -> Self {
+    // 1. Check explicit env vars (highest priority - user preference)
+    if std::env::var("NH_DARWIN_FLAKE").is_ok_and(|v| !v.is_empty()) {
+      return Self::Darwin;
+    }
+    if std::env::var("NH_HOME_FLAKE").is_ok_and(|v| !v.is_empty()) {
+      return Self::Home;
+    }
+
+    // 2. Check /run/current-system (nix-darwin creates this symlink)
+    if std::path::Path::new("/run/current-system").exists() {
+      return Self::Darwin;
+    }
+
+    // 3. Check flake config paths
+    if std::path::Path::new("/etc/nix-darwin/flake.nix").exists() {
+      return Self::Darwin;
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+      let hm_flake = format!("{home}/.config/home-manager/flake.nix");
+      if std::path::Path::new(&hm_flake).exists() {
+        return Self::Home;
+      }
+    }
+
+    // 4. Default to Home on macOS (safer fallback)
+    Self::Home
+  }
+
+  /// Check if the current system is NixOS by examining /etc/os-release
+  fn is_nixos() -> bool {
+    std::fs::read_to_string("/etc/os-release")
+      .map(|content| {
+        content.lines().any(|line| {
+          line.trim() == "ID=nixos" || line.trim() == "ID=\"nixos\""
+        })
+      })
+      .unwrap_or(false)
+  }
+
+  /// Returns a human-readable description of how this system type was detected
+  #[must_use]
+  pub fn detection_reason(&self) -> &'static str {
+    match self {
+      Self::Darwin => "nix-darwin detected on macOS",
+      Self::Os => "ID=nixos in /etc/os-release",
+      Self::Home => "home-manager (default)",
+    }
+  }
 }
 
 #[derive(Debug, Args)]
@@ -796,12 +878,14 @@ pub struct SystemRebuildArgs {
   pub update_args: UpdateArgs,
 
   /// Hostname (os/darwin) or configuration name (home) selector
-  #[arg(long, short = 'H', global = true)]
+  #[arg(
+    long,
+    short = 'H',
+    visible_alias = "configuration",
+    visible_short_alias = 'c',
+    global = true
+  )]
   pub hostname: Option<String>,
-
-  /// Home-manager configuration name (alias for --hostname, home only)
-  #[arg(long, short, conflicts_with = "hostname")]
-  pub configuration: Option<String>,
 
   /// Explicitly select a specialisation
   #[arg(long, short)]
@@ -846,12 +930,14 @@ pub struct SystemReplArgs {
   pub installable: Installable,
 
   /// Hostname (os/darwin) or configuration name (home) selector
-  #[arg(long, short = 'H', global = true)]
+  #[arg(
+    long,
+    short = 'H',
+    visible_alias = "configuration",
+    visible_short_alias = 'c',
+    global = true
+  )]
   pub hostname: Option<String>,
-
-  /// Home-manager configuration name (alias for --hostname, home only)
-  #[arg(long, short, conflicts_with = "hostname")]
-  pub configuration: Option<String>,
 
   /// Extra arguments passed to nix repl (home only)
   #[arg(last = true)]

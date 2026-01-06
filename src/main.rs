@@ -23,32 +23,30 @@ use crate::{commands::ElevationStrategy, interface::SystemType};
 pub const NH_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const NH_REV: Option<&str> = option_env!("NH_REV");
 
-/// Resolve system type from CLI args or environment variable (for early
-/// parsing)
+/// Resolve system type from CLI args, environment variable, or autodetection
+/// (for early parsing)
 fn resolve_system_type_early() -> Option<SystemType> {
-  // First check CLI args, then fall back to env var
-  SystemType::from_args().or_else(|| SystemType::from_env().ok())
+  // First check CLI args, then fall back to env var, then autodetect
+  SystemType::from_args()
+    .or_else(|| SystemType::from_env().ok())
+    .or_else(|| Some(SystemType::autodetect()))
 }
 
 /// Modify the CLI command to hide system subcommands incompatible with
-/// `--system-type` or `NH_SYSTEM_TYPE`
+/// the resolved system type (from --system-type, NH_SYSTEM_TYPE, or
+/// autodetection)
 fn configure_system_subcommands(cmd: clap::Command) -> clap::Command {
   cmd.mut_subcommand("system", |system_cmd| {
+    // resolve_system_type_early() always returns Some due to autodetection
     match resolve_system_type_early() {
       Some(SystemType::Os) => system_cmd, // All subcommands visible for NixOS
-      Some(SystemType::Darwin) => {
-        // Darwin doesn't support boot or test
+      Some(SystemType::Darwin) | Some(SystemType::Home) => {
+        // Darwin and Home don't support boot or test
         system_cmd
           .mut_subcommand("boot", |c| c.hide(true))
           .mut_subcommand("test", |c| c.hide(true))
       },
-      Some(SystemType::Home) => {
-        // Home doesn't support boot or test
-        system_cmd
-          .mut_subcommand("boot", |c| c.hide(true))
-          .mut_subcommand("test", |c| c.hide(true))
-      },
-      None => system_cmd, // Show all if not specified
+      None => unreachable!("autodetect always provides a fallback"),
     }
   })
 }
@@ -152,9 +150,15 @@ mod tests {
 
   #[test]
   #[serial]
-  fn test_configure_system_subcommands_without_env_shows_all() {
+  fn test_configure_system_subcommands_autodetect_applies_when_env_not_set() {
     let _guard = EnvGuard::remove("NH_SYSTEM_TYPE");
     let cmd = configure_system_subcommands(crate::interface::Main::command());
+
+    // When NH_SYSTEM_TYPE is not set, autodetection kicks in.
+    // On macOS, this detects as Darwin, so boot/test are hidden.
+    // On NixOS, this detects as Os, so all are visible.
+    // Otherwise, this detects as Home, so boot/test are hidden.
+    let autodetected = SystemType::autodetect();
 
     assert!(
       !is_system_subcommand_hidden(&cmd, "switch"),
@@ -164,14 +168,33 @@ mod tests {
       !is_system_subcommand_hidden(&cmd, "build"),
       "build should be visible"
     );
-    assert!(
-      !is_system_subcommand_hidden(&cmd, "boot"),
-      "boot should be visible when NH_SYSTEM_TYPE is not set"
-    );
-    assert!(
-      !is_system_subcommand_hidden(&cmd, "test"),
-      "test should be visible when NH_SYSTEM_TYPE is not set"
-    );
+
+    // boot and test visibility depends on autodetected type
+    match autodetected {
+      SystemType::Os => {
+        assert!(
+          !is_system_subcommand_hidden(&cmd, "boot"),
+          "boot should be visible when autodetected as os"
+        );
+        assert!(
+          !is_system_subcommand_hidden(&cmd, "test"),
+          "test should be visible when autodetected as os"
+        );
+      },
+      SystemType::Darwin | SystemType::Home => {
+        assert!(
+          is_system_subcommand_hidden(&cmd, "boot"),
+          "boot should be hidden when autodetected as {:?}",
+          autodetected
+        );
+        assert!(
+          is_system_subcommand_hidden(&cmd, "test"),
+          "test should be hidden when autodetected as {:?}",
+          autodetected
+        );
+      },
+    }
+
     assert!(
       !is_system_subcommand_hidden(&cmd, "repl"),
       "repl should be visible"
