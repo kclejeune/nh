@@ -465,15 +465,6 @@ enum NixStoreScheme {
   SshNg,
 }
 
-impl NixStoreScheme {
-  const fn as_str(self) -> &'static str {
-    match self {
-      Self::Ssh => "ssh",
-      Self::SshNg => "ssh-ng",
-    }
-  }
-}
-
 // NOTE: This _deliberately_ does not implement `Eq` or `PartialEq` because we
 // need to be clear about what we want to compare; This might differ on a
 // case-to-case basis. By not implementing `Eq`, we avoid accidental misuse of
@@ -634,9 +625,22 @@ impl RemoteHost {
   }
 
   /// Get the SSH store URI used by Nix store commands.
+  ///
+  /// For `ssh-ng://` stores the connection pool is capped below sshd's
+  /// default `MaxSessions` (10). Nix's default of 64 connections all
+  /// multiplex over a single SSH master; once sshd refuses a session, ssh
+  /// falls back to a direct connection whose `LocalCommand=echo started`
+  /// handshake marker is never consumed, garbling the daemon protocol
+  /// ("protocol mismatch, got 'started ...'"). Legacy `ssh://` already
+  /// defaults to a single connection and is left untouched.
   #[must_use]
   pub fn nix_store_uri(&self) -> String {
-    format!("{}://{}", self.store_scheme.as_str(), self.host)
+    match self.store_scheme {
+      NixStoreScheme::Ssh => format!("ssh://{}", self.host),
+      NixStoreScheme::SshNg => {
+        format!("ssh-ng://{}?max-connections=8", self.host)
+      },
+    }
   }
 }
 
@@ -2207,25 +2211,37 @@ mod tests {
   #[test]
   fn test_nix_store_uri_defaults_bare_host_to_ssh_ng() {
     let host = RemoteHost::parse("build.example").expect("should parse");
-    assert_eq!(host.nix_store_uri(), "ssh-ng://build.example");
+    assert_eq!(
+      host.nix_store_uri(),
+      "ssh-ng://build.example?max-connections=8"
+    );
   }
 
   #[test]
   fn test_nix_store_uri_for_user_host() {
     let host = RemoteHost::parse("user@build.example").expect("should parse");
-    assert_eq!(host.nix_store_uri(), "ssh-ng://user@build.example");
+    assert_eq!(
+      host.nix_store_uri(),
+      "ssh-ng://user@build.example?max-connections=8"
+    );
   }
 
   #[test]
   fn test_nix_store_uri_preserves_ipv6_brackets() {
     let host = RemoteHost::parse("[2001:db8::1]").expect("should parse");
-    assert_eq!(host.nix_store_uri(), "ssh-ng://[2001:db8::1]");
+    assert_eq!(
+      host.nix_store_uri(),
+      "ssh-ng://[2001:db8::1]?max-connections=8"
+    );
   }
 
   #[test]
   fn test_nix_store_uri_preserves_user_ipv6_brackets() {
     let host = RemoteHost::parse("user@[2001:db8::1]").expect("should parse");
-    assert_eq!(host.nix_store_uri(), "ssh-ng://user@[2001:db8::1]");
+    assert_eq!(
+      host.nix_store_uri(),
+      "ssh-ng://user@[2001:db8::1]?max-connections=8"
+    );
   }
 
   #[test]

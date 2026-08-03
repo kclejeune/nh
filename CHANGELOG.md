@@ -14,7 +14,22 @@ be put in the "Changed" section or, if it's just to remove code or
 functionality, under the "Removed" section.
 -->
 
-## 4.4.2
+## Unreleased
+
+### Fixed
+
+- Remote deployments (`--target-host`) no longer fail with `cannot open
+  connection to remote store 'ssh-ng://…': protocol mismatch, got 'started…'`.
+  The generation diff previously queried the target's closure through a local
+  `--store ssh-ng://` connection; Nix multiplexes its connection pool (64 by
+  default) over a single SSH master, which trips sshd's `MaxSessions` limit
+  (10 by default). Refused sessions fall back to direct connections whose
+  `LocalCommand=echo started` handshake marker is never consumed, corrupting
+  the daemon protocol — and capping the pool instead deadlocks Nix whenever
+  the closure fan-out exceeds the pool. The diff queries now run *on* the
+  target host over nh's existing multiplexed SSH connection, letting the
+  remote daemon walk its own store locally. `nix copy` store URIs are also
+  capped at `max-connections=8` to stay under sshd's session limit.
 
 ### Added
 

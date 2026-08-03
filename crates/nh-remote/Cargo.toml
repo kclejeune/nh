@@ -20,6 +20,7 @@ nix-command.workspace    = true
 secrecy.workspace        = true
 shlex.workspace          = true
 signal-hook.workspace    = true
+size.workspace           = true
 subprocess.workspace     = true
 tracing.workspace        = true
 which.workspace          = true

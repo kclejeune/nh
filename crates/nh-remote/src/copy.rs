@@ -334,7 +334,7 @@ mod tests {
       vec![
         "--no-check-sigs",
         "--to",
-        "ssh-ng://build.example",
+        "ssh-ng://build.example?max-connections=8",
         "--substitute-on-destination",
       ]
     );
@@ -366,7 +366,7 @@ mod tests {
     assert_eq!(CopyDirection::FromRemote(&host).args(), vec![
       "--no-check-sigs",
       "--from",
-      "ssh-ng://build.example"
+      "ssh-ng://build.example?max-connections=8"
     ]);
   }
 
@@ -385,9 +385,9 @@ mod tests {
       vec![
         "--no-check-sigs",
         "--from",
-        "ssh-ng://build.example",
+        "ssh-ng://build.example?max-connections=8",
         "--to",
-        "ssh-ng://target.example",
+        "ssh-ng://target.example?max-connections=8",
         "--substitute-on-destination",
       ]
     );
@@ -403,7 +403,11 @@ mod tests {
         use_substitutes: false,
       }
       .args(),
-      vec!["--no-check-sigs", "--to", "ssh-ng://user@[2001:db8::1]"]
+      vec![
+        "--no-check-sigs",
+        "--to",
+        "ssh-ng://user@[2001:db8::1]?max-connections=8"
+      ]
     );
   }
 
